@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Gilam Zakaz | Mobil</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- LOADING SCREEN -->
+    <div class="loading-screen" id="loadingScreen">
+        <div class="loading-spinner"></div>
+        <p>Yuklanmoqda...</p>
+    </div>       
+
+    <!-- BOTTOM NAVIGATION -->
+    <nav class="bottom-nav">
+        <button class="nav-item active" data-page="home" onclick="switchPage('home')">
+            <i class="fas fa-home"></i>
+            <span>Bosh sahifa</span>
+        </button>
+        <button class="nav-item" data-page="orders" onclick="switchPage('orders')">
+            <i class="fas fa-shopping-bag"></i>
+            <span>Zakazlar</span>
+            <span class="nav-badge" id="ordersBadge">0</span>
+        </button>
+        <button class="nav-item add-btn" id="openModal" onclick="openOrderModal()">
+            <i class="fas fa-plus"></i>
+            <span class="add-btn-label">Yangi</span>
+        </button>
+        <button class="nav-item" data-page="queue" onclick="switchPage('queue')">
+            <i class="fas fa-list-ol"></i>
+            <span>Navbat</span>
+            <span class="nav-badge" id="queueBadge">0</span>
+        </button>
+        <button class="nav-item" data-page="stats" onclick="switchPage('stats')">
+            <i class="fas fa-chart-bar"></i>
+            <span>Hisobot</span>
+        </button>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        
+        <!-- HOME PAGE -->
+        <div class="page active" id="homePage">
+            <div class="mobile-header">
+                <div class="welcome-section">
+                    <h1>Gilam Zakaz</h1>
+                    <p class="date" id="currentDate"></p>
+                </div>
+                <button class="admin-btn" id="adminBtn" onclick="openAdminLoginModal()">
+                    <i class="fas fa-cog"></i>
+                </button>
+            </div>
+
+            <div class="stats-cards">
+                <div class="stat-card">
+                    <i class="fas fa-shopping-bag" style="color: #667eea"></i>
+                    <div class="stat-value" id="totalOrdersStat">0</div>
+                    <div class="stat-label">Jami</div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-clock" style="color: #ff9800"></i>
+                    <div class="stat-value" id="todayOrdersStat">0</div>
+                    <div class="stat-label">Bugun</div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-ruler-combined" style="color: #4caf50"></i>
+                    <div class="stat-value" id="totalAreaStat">0</div>
+                    <div class="stat-label">m²</div>
+                </div>
+            </div>
+
+            <div class="quick-actions">
+                <button class="action-btn" onclick="openOrderModal()">
+                    <i class="fas fa-plus-circle"></i>
+                    <span>Yangi zakaz</span>
+                </button>
+                <button class="action-btn" onclick="window.location.href='tel:+99893875565'">
+                    <i class="fas fa-phone-alt"></i>
+                    <span>Qo'ng'iroq</span>
+                </button>
+                <button class="action-btn" onclick="window.open('https://t.me/gilam_zakaz', '_blank')">
+                    <i class="fab fa-telegram"></i>
+                    <span>Telegram</span>
+                </button>
+            </div>
+
+            <div class="section-header">
+                <h2>Oxirgi zakazlar</h2>
+                <button class="see-all" onclick="switchPage('orders')">Barchasi</button>
+            </div>
+            <div class="orders-list" id="recentOrders"></div>
+
+            <div class="section-header" style="margin-top: 24px;">
+                <h2>Navbatdagi zakazlar</h2>
+                <button class="see-all" onclick="switchPage('queue')">Barchasi</button>
+            </div>
+            <div class="queue-list" id="queuePreview"></div>
+        </div>
+
+        <!-- ORDERS PAGE -->
+        <div class="page" id="ordersPage">
+            <h2 class="page-title">Barcha zakazlar</h2>
+
+            <div class="search-box">
+                <i class="fas fa-search"></i>
+                <input type="text" id="searchInput" placeholder="Telefon, manzil yoki oxirgi 4 raqam..." onkeyup="filterOrders()" inputmode="text">
+            </div>
+            <div class="search-hint">💡 Masalan: oxirgi 4 raqam "5678" yozsa zakaz topiladi</div>
+            
+            <div class="filter-chips">
+                <button class="chip active" data-filter="all" onclick="setFilter(this, 'all')">Barchasi</button>
+                <button class="chip" data-filter="today" onclick="setFilter(this, 'today')">Bugun</button>
+                <button class="chip" data-filter="week" onclick="setFilter(this, 'week')">Hafta</button>
+                <button class="chip" data-filter="month" onclick="setFilter(this, 'month')">Oy</button>
+            </div>
+
+            <div class="orders-list" id="ordersList"></div>
+        </div>
+
+        <!-- QUEUE PAGE -->
+        <div class="page" id="queuePage">
+            <div class="queue-header">
+                <h2 class="page-title">📋 Navbat</h2>
+                <span class="queue-total" id="queueTotal">0</span>
+            </div>
+            
+            <div class="filter-chips">
+                <button class="chip active" data-queue="all" onclick="setQueueStatus(this, 'all')">Barchasi</button>
+                <button class="chip" data-queue="queue" onclick="setQueueStatus(this, 'queue')">⏳ Kutilmoqda</button>
+                <button class="chip" data-queue="washing" onclick="setQueueStatus(this, 'washing')">🧼 Yuvilmoqda</button>
+                <button class="chip" data-queue="ready" onclick="setQueueStatus(this, 'ready')">✅ Tayyor</button>
+            </div>
+            
+            <div class="sort-chips">
+                <span class="sort-label"><i class="fas fa-sort"></i> Tartib:</span>
+                <button class="sort-chip active" data-qsort="newest" onclick="setQueueSort(this,'newest')">🆕 Yangilari</button>
+                <button class="sort-chip" data-qsort="oldest" onclick="setQueueSort(this,'oldest')">📦 Eskilari</button>
+                <button class="sort-chip" data-qsort="village" onclick="setQueueSort(this,'village')">📍 Qishloq</button>
+                <button class="sort-chip" data-qsort="time" onclick="setQueueSort(this,'time')">⏰ Vaqt</button>
+            </div>
+            
+            <div class="queue-list" id="queueList"></div>
+        </div>
+
+        <!-- STATISTICS PAGE -->
+        <div class="page" id="statsPage">
+            <h2 class="page-title">Statistika</h2>
+
+            <div class="stats-cards">
+                <div class="stat-card">
+                    <div class="stat-label">Bugun</div>
+                    <div class="stat-value" id="repToday">0 so'm</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Hafta</div>
+                    <div class="stat-value" id="repWeek">0 so'm</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Oy</div>
+                    <div class="stat-value" id="repMonth">0 so'm</div>
+                </div>
+            </div>
+
+            <div class="section-header" style="margin-top: 20px;">
+                <h2>📊 Ma'lumotlar</h2>
+            </div>
+            <div id="reportStats" class="report-stats-box"></div>
+        </div>
+    </main>
+
+    <!-- ORDER MODAL -->
+    <div class="modal" id="orderModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-plus-circle"></i> Yangi zakaz</h2>
+                <button class="close-btn" onclick="closeOrderModal()">✕</button>
+            </div>
+
+            <div class="modal-body">
+                <div class="form-group">
+                    <label><i class="fas fa-phone"></i> Telefon raqam</label>
+                    <div class="phone-input-wrapper">
+                        <span class="phone-prefix">+998</span>
+                        <input 
+                            type="tel" 
+                            id="phone" 
+                            placeholder="93 123 45 67" 
+                            inputmode="numeric" 
+                            pattern="[0-9]{9}" 
+                            maxlength="9" 
+                            required
+                            oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,9)"
+                            onchange="validatePhone(this)">
+                    </div>
+                    <small id="phoneError" style="color: #f44336; display: none; margin-top: 4px;">
+                        ❌ 9 raqamli telefon raqami kiriting
+                    </small>
+                </div>
+
+                <div class="form-group">
+                    <label><i class="fas fa-map-marker-alt"></i> Qishloq</label>
+                    <input type="text" id="village" placeholder="Do'stlik">
+                </div>
+
+                <!-- Mahsulot turi tanlash tugmalari -->
+                <div class="form-group">
+                    <label><i class="fas fa-plus-circle"></i> Mahsulot qo'shish</label>
+                    <div class="product-add-buttons">
+                        <button type="button" class="prod-add-btn" onclick="addProductItem('gilam','🧺','Gilam')">
+                            <span class="prod-add-emoji">🧺</span>
+                            <span>Gilam</span>
+                        </button>
+                        <button type="button" class="prod-add-btn" onclick="addProductItem('adyol','🛏️','Adyol')">
+                            <span class="prod-add-emoji">🛏️</span>
+                            <span>Adyol</span>
+                        </button>
+                        <button type="button" class="prod-add-btn" onclick="addProductItem('yakandoz','🪣','Yakandoz')">
+                            <span class="prod-add-emoji">🪣</span>
+                            <span>Yakandoz</span>
+                        </button>
+                        <button type="button" class="prod-add-btn" onclick="addProductItem('parda','🪟','Parda')">
+                            <span class="prod-add-emoji">🪟</span>
+                            <span>Parda</span>
+                        </button>
+                        <button type="button" class="prod-add-btn" onclick="addProductItem('korpa','🛌','Ko\'rpa')">
+                            <span class="prod-add-emoji">🛌</span>
+                            <span>Ko'rpa</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Qo'shilgan mahsulotlar kartalar ro'yxati -->
+                <div id="productItemsList" class="product-items-list"></div>
+
+                <!-- Jami narx -->
+                <div class="live-calculator" id="totalCalcBox" style="display:none;">
+                    <div class="calc-item total">
+                        <span>📦 Jami narx:</span>
+                        <strong id="livePrice">0 so'm</strong>
+                    </div>
+                    <div class="calc-item">
+                        <span>Mahsulotlar soni:</span>
+                        <strong id="liveItemCount">0 ta</strong>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label><i class="fas fa-camera"></i> Rasmlar</label>
+                    <div class="upload-area" id="dropZone" onclick="document.getElementById('images').click()">
+                        <input type="file" id="images" multiple accept="image/*" hidden onchange="showPreview(this.files)">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p>Rasm yuklash uchun bosing</p>
+                        <small>JPG, PNG (10 tagacha)</small>
+                    </div>
+                    <div class="image-preview" id="imagePreview"></div>
+                </div>
+
+                <div class="form-group">
+                    <label><i class="fas fa-comment"></i> Izoh</label>
+                    <textarea id="comment" rows="2" placeholder="Qo'shimcha ma'lumot..."></textarea>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeOrderModal()">Bekor</button>
+                <button class="btn-save" id="saveOrder" onclick="saveOrder()">
+                    <i class="fas fa-check"></i> Saqlash
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ORDER DETAILS MODAL -->
+    <div class="modal" id="detailsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Zakaz tafsilotlari</h2>
+                <button class="close-btn" onclick="closeDetailsModal()">✕</button>
+            </div>
+            <div class="modal-body" id="detailsContent"></div>
+            
+            <!-- NAVIGATION BUTTONS -->
+            <div class="modal-footer" id="detailsNavigation"></div>
+        </div>
+    </div>
+
+    <!-- ADMIN LOGIN MODAL -->
+    <div class="modal" id="adminLoginModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-lock"></i> Admin panel</h2>
+                <button class="close-btn" onclick="closeAdminLoginModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <i class="fas fa-user-shield" style="font-size: 60px; color: #667eea;"></i>
+                </div>
+                
+                <div class="form-group">
+                    <label><i class="fas fa-key"></i> Parol</label>
+                    <input type="password" id="adminPassword" placeholder="Parolni kiriting" onkeypress="if(event.key==='Enter') adminLogin()">
+                </div>
+
+                <div class="admin-hint">
+                    <i class="fas fa-info-circle"></i>
+                    <small>Admin paroli: <strong>2007</strong></small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeAdminLoginModal()">Bekor</button>
+                <button class="btn-save" id="adminLoginBtn" onclick="adminLogin()">
+                    <i class="fas fa-sign-in-alt"></i> Kirish
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST NOTIFICATION -->
+    <div id="toast" class="toast"></div>
+
+    <!-- SCRIPTS -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
