@@ -1,25 +1,24 @@
-// =================== GILAM ZAKAZ - SCRIPT v4.0 ===================
+// =================== GILAM ZAKAZ - SCRIPT v5.3 (Firebase) ===================
 
-// STATE
+// =================== FIREBASE CONFIG ===================
+// O'z Firebase URL ingizni shu yerga yozing:
+var FIREBASE_URL = 'https://gilamuz-8308f-default-rtdb.firebaseio.com/';
+
+// =================== STATE ===================
 var orders = [];
 var currentFilter = 'all';
 var currentQueueFilter = 'all';
+var currentQueueSort = 'newest';
 var currentPage = 'home';
-var db = null;
 var currentImageIndex = 0;
 var imageGallery = [];
 var currentOrderId = null;
 var PRICE_PER_SQM = 80000;
-var DB_NAME = 'GilamZakazDB';
-var DB_VERSION = 1; // Versiyani 1 ga tushiramiz - muammoli eski versiyani chetlab o'tish uchun
 var priceItems = [];
 var selectedPriceItem = null;
-
-// YANGI: Mahsulot elementlari (cheksiz qo'shish)
-var productItemsList = []; // [{id, type, emoji, name, width, height, pricePerSqm, area, price}]
+var productItemsList = [];
 var productItemCounter = 0;
 
-// Mahsulot turlari narxlari (admin paneldan boshqariladi)
 var PRODUCT_PRICES = {
     gilam:    { emoji: '🧺', name: 'Gilam',    pricingType: 'sqm',  pricePerSqm: 80000 },
     adyol:    { emoji: '🛏️', name: 'Adyol',    pricingType: 'size', priceSmall: 40000, priceLarge: 70000 },
@@ -29,41 +28,25 @@ var PRODUCT_PRICES = {
 };
 
 function loadProductPricesFromAdmin() {
-    // Admin paneldan saqlangan narxlarni yuklash
     var saved = localStorage.getItem('gilam_product_prices_v2');
     if (saved) {
         try {
             var parsed = JSON.parse(saved);
             Object.keys(parsed).forEach(function(key) {
-                if (PRODUCT_PRICES[key]) {
-                    Object.assign(PRODUCT_PRICES[key], parsed[key]);
-                }
+                if (PRODUCT_PRICES[key]) Object.assign(PRODUCT_PRICES[key], parsed[key]);
             });
         } catch(e) {}
     }
 }
 
-// INITIALIZATION
+// =================== INITIALIZATION ===================
 document.addEventListener('DOMContentLoaded', function () {
     var savedPrice = localStorage.getItem('gilam_global_price');
-    if (savedPrice && parseInt(savedPrice) >= 1000) {
-        PRICE_PER_SQM = parseInt(savedPrice);
-    }
-
-    // Admin paneldan narx turlarini yuklash
+    if (savedPrice && parseInt(savedPrice) >= 1000) PRICE_PER_SQM = parseInt(savedPrice);
     loadPriceItems();
-
-    initDB(function(err) {
-        if (err) {
-            console.error('DB xatolik:', err);
-            showToast('DB xatolik: ' + err, 'error');
-            // DB ishlamasa ham interfeys ishlaydi
-            finishInit();
-            return;
-        }
-        loadOrdersFromDB(function() {
-            finishInit();
-        });
+    loadOrdersFromFirebase(function() {
+        finishInit();
+        startAutoRefresh();
     });
 });
 
@@ -74,278 +57,121 @@ function finishInit() {
     updateStats();
     displayRecentOrders();
     displayQueuePreview();
-
     setTimeout(function() {
         var ls = document.getElementById('loadingScreen');
         if (ls) ls.classList.add('hide');
     }, 600);
+}
 
-    // Auto-refresh
+function startAutoRefresh() {
     setInterval(function() {
-        if (currentPage === 'home' || currentPage === 'queue') {
-            loadOrdersFromDB(function() {
-                updateStats();
-                displayRecentOrders();
-                displayQueuePreview();
-                if (currentPage === 'queue') displayQueue();
-            });
-        }
-    }, 5000);
+        loadOrdersFromFirebase(function() {
+            updateStats();
+            displayRecentOrders();
+            displayQueuePreview();
+            if (currentPage === 'queue')  displayQueue();
+            if (currentPage === 'orders') filterOrders();
+        });
+    }, 8000);
 }
 
-// =================== DATABASE ===================
-function initDB(callback) {
-    if (!window.indexedDB) {
-        callback('Brauzeringiz IndexedDB ni qollab-quvvatlamaydi');
-        return;
-    }
-
-    // Avval eski DB ni tekshiramiz
-    var checkReq = indexedDB.open(DB_NAME);
-    checkReq.onsuccess = function() {
-        var existingDB = checkReq.result;
-        var existingVersion = existingDB.version;
-        existingDB.close();
-
-        // Agar eski versiya mavjud bo'lsa, uni ishlatamiz
-        var targetVersion = Math.max(existingVersion, 1);
-        openDatabase(targetVersion, callback);
-    };
-    checkReq.onerror = function() {
-        openDatabase(1, callback);
-    };
+// =================== FIREBASE ===================
+function firebaseFetch(method, path, data, callback) {
+    var url = FIREBASE_URL + path + '.json';
+    var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+    if (data !== null && data !== undefined) opts.body = JSON.stringify(data);
+    fetch(url, opts)
+        .then(function(r) { return r.json(); })
+        .then(function(res) { callback(null, res); })
+        .catch(function(e) { callback(e.message || 'Network xato', null); });
 }
 
-function openDatabase(version, callback) {
-    var req = indexedDB.open(DB_NAME, version);
-
-    req.onerror = function(e) {
-        var msg = req.error ? req.error.message || req.error.name || String(req.error) : 'Noma\'lum xato';
-        console.error('DB ochilmadi:', msg, e);
-        callback('DB ochilmadi: ' + msg);
-    };
-
-    req.onblocked = function() {
-        // Boshqa tab DB ni ishlatayapti
-        showToast('Iltimos boshqa tablarni yoping va sahifani yangilang', 'error');
-        callback('DB blocked - boshqa tab');
-    };
-
-    req.onsuccess = function() {
-        db = req.result;
-
-        db.onversionchange = function() {
-            db.close();
-            db = null;
-            showToast('DB yangilandi, sahifani yangilang', 'info');
-        };
-
-        db.onerror = function(event) {
-            console.error('DB global xato:', event.target.error);
-        };
-
-        console.log('DB tayyor, version:', db.version);
-
-        // Store mavjudligini tekshiramiz
-        if (!db.objectStoreNames.contains('orders')) {
-            // Store yo'q, yangi version bilan ochamiz
-            db.close();
-            db = null;
-            var newVersion = version + 1;
-            openDatabase(newVersion, callback);
-            return;
-        }
-
-        callback(null);
-    };
-
-    req.onupgradeneeded = function(e) {
-        var upgradeDB = e.target.result;
-        var transaction = e.target.transaction;
-
-        transaction.onerror = function() {
-            console.error('Upgrade transaction xato:', transaction.error);
-        };
-
-        if (!upgradeDB.objectStoreNames.contains('orders')) {
-            var store = upgradeDB.createObjectStore('orders', { keyPath: 'id' });
-            store.createIndex('phone', 'phone', { unique: false });
-            store.createIndex('createdAt', 'createdAt', { unique: false });
-            store.createIndex('status', 'status', { unique: false });
-            console.log('orders store yaratildi');
-        }
-    };
-}
-
-function loadOrdersFromDB(callback) {
-    if (!db) {
-        orders = [];
-        if (callback) callback();
-        return;
-    }
-
-    try {
-        var tx = db.transaction('orders', 'readonly');
-        var store = tx.objectStore('orders');
-        var req = store.getAll();
-
-        req.onsuccess = function() {
-            var result = req.result || [];
-            orders = result
-                .sort(function(a, b) { return new Date(b.createdAt) - new Date(a.createdAt); })
-                .map(function(o) {
-                    return Object.assign({
-                        status: 'new',
-                        paymentStatus: 'unpaid',
-                        paymentMethod: null,
-                        paidAt: null,
-                        queueNumber: null
-                    }, o, { id: Number(o.id) });
-                });
-            console.log('Yuklandi:', orders.length, 'zakaz');
-            if (callback) callback();
-        };
-
-        req.onerror = function() {
-            console.error('Yuklash xato:', req.error);
+function loadOrdersFromFirebase(callback) {
+    firebaseFetch('GET', '/orders', null, function(err, data) {
+        if (err) {
+            console.error('Firebase xato:', err);
             orders = [];
             if (callback) callback();
-        };
-
-        tx.onerror = function() {
-            console.error('Transaction xato:', tx.error);
-        };
-    } catch(e) {
-        console.error('loadOrdersFromDB exception:', e);
-        orders = [];
+            return;
+        }
+        if (!data) { orders = []; if (callback) callback(); return; }
+        orders = Object.values(data)
+            .sort(function(a, b) { return new Date(b.createdAt) - new Date(a.createdAt); })
+            .map(function(o) {
+                return Object.assign({
+                    status: 'new', paymentStatus: 'unpaid',
+                    paymentMethod: null, paidAt: null, queueNumber: null
+                }, o, { id: Number(o.id) });
+            });
         if (callback) callback();
-    }
+    });
 }
 
+function loadOrdersFromDB(callback) { loadOrdersFromFirebase(callback); }
+
 function saveOrderToDB(order, callback) {
-    if (!db) { callback('DB ulanmagan'); return; }
-
-    try {
-        var tx = db.transaction('orders', 'readwrite');
-        var store = tx.objectStore('orders');
-        var req = store.add(order);
-
-        req.onsuccess = function() {
-            console.log('Saqlandi, id:', req.result);
-            callback(null, req.result);
-        };
-
-        req.onerror = function() {
-            var msg = req.error ? (req.error.message || req.error.name || String(req.error)) : 'Xato';
-            // DuplicateError: xuddi shu id bor
-            if (req.error && req.error.name === 'ConstraintError') {
-                callback('Bu ID allaqachon mavjud. Qaytadan urining.');
-            } else {
-                callback('Saqlash xato: ' + msg);
-            }
-        };
-
-        tx.onerror = function() {
-            var msg = tx.error ? (tx.error.message || String(tx.error)) : 'Transaction xato';
-            callback('Transaction: ' + msg);
-        };
-
-        tx.onabort = function() {
-            callback('Transaction bekor qilindi');
-        };
-    } catch(e) {
-        callback('Exception: ' + e);
-    }
+    firebaseFetch('PUT', '/orders/' + order.id, order, function(err) {
+        if (err) { callback('Saqlash xato: ' + err); return; }
+        callback(null, order.id);
+    });
 }
 
 function updateOrderInDB(order, callback) {
-    if (!db) { if (callback) callback('DB ulanmagan'); return; }
-
-    try {
-        var tx = db.transaction('orders', 'readwrite');
-        var store = tx.objectStore('orders');
-        var req = store.put(order);
-        req.onsuccess = function() { if (callback) callback(null); };
-        req.onerror = function() { if (callback) callback('Yangilash xato: ' + req.error); };
-    } catch(e) {
-        if (callback) callback('Exception: ' + e);
-    }
+    firebaseFetch('PUT', '/orders/' + order.id, order, function(err) {
+        if (err) { if (callback) callback('Yangilash xato: ' + err); return; }
+        if (callback) callback(null);
+    });
 }
 
 function deleteOrderFromDB(id, callback) {
-    if (!db) { if (callback) callback('DB ulanmagan'); return; }
-
-    try {
-        var tx = db.transaction('orders', 'readwrite');
-        var store = tx.objectStore('orders');
-        var req = store.delete(Number(id));
-        req.onsuccess = function() { if (callback) callback(null); };
-        req.onerror = function() { if (callback) callback('Ochirish xato: ' + req.error); };
-    } catch(e) {
-        if (callback) callback('Exception: ' + e);
-    }
+    firebaseFetch('DELETE', '/orders/' + id, null, function(err) {
+        if (err) { if (callback) callback('Ochirish xato: ' + err); return; }
+        if (callback) callback(null);
+    });
 }
 
 // =================== PRICE ITEMS ===================
 function loadPriceItems() {
     var pi = localStorage.getItem('gilam_price_items');
-    if (pi) {
-        try { priceItems = JSON.parse(pi); } catch(e) { priceItems = []; }
-    }
+    if (pi) { try { priceItems = JSON.parse(pi); } catch(e) { priceItems = []; } }
     if (!priceItems.length) {
         priceItems = [
-            {id:1, name:'Oddiy gilam', price:80000, type:'sqm', emoji:'🧺', color:'#667eea'},
-            {id:2, name:'Jun gilam',   price:120000,type:'sqm', emoji:'🐑', color:'#764ba2'},
-            {id:3, name:'Atlas gilam', price:60000, type:'sqm', emoji:'✨', color:'#22c55e'},
-            {id:4, name:'Xali gilam',  price:100000,type:'sqm', emoji:'🏺', color:'#f97316'},
+            {id:1, name:'Oddiy gilam', price:80000,  type:'sqm', emoji:'🧺', color:'#667eea'},
+            {id:2, name:'Jun gilam',   price:120000, type:'sqm', emoji:'🐑', color:'#764ba2'},
+            {id:3, name:'Atlas gilam', price:60000,  type:'sqm', emoji:'✨', color:'#22c55e'},
+            {id:4, name:'Xali gilam',  price:100000, type:'sqm', emoji:'🏺', color:'#f97316'},
         ];
     }
-    // Global narx ham yangilansin
     var gp = localStorage.getItem('gilam_global_price');
-    if (gp && parseInt(gp) >= 1000) {
-        PRICE_PER_SQM = parseInt(gp);
-    }
+    if (gp && parseInt(gp) >= 1000) PRICE_PER_SQM = parseInt(gp);
 }
 
 function renderProductTypeSelector() {
     var container = document.getElementById('productTypeSelector');
     if (!container) return;
-    
-    // Har safar yangilashda priceItems ni qayta o'qiymiz
     loadPriceItems();
-    
     container.innerHTML = '';
-    
     priceItems.forEach(function(item, idx) {
         var card = document.createElement('div');
         card.className = 'product-type-card' + (idx === 0 && !selectedPriceItem ? ' selected' : '');
         if (selectedPriceItem && selectedPriceItem.id === item.id) card.className += ' selected';
-        
         var bgColor = item.color ? hexToRgba(item.color, 0.12) : 'rgba(102,126,234,0.1)';
-        
-        card.innerHTML = 
+        card.innerHTML =
             '<div class="pt-emoji" style="background:' + bgColor + '">' + (item.emoji||'🧺') + '</div>' +
             '<div class="pt-info">' +
                 '<div class="pt-name">' + item.name + '</div>' +
                 '<div class="pt-price">' + Number(item.price).toLocaleString() + " so'm/m²</div>" +
             '</div>' +
             '<div class="pt-check"><i class="fas fa-check"></i></div>';
-        
         card.onclick = function() {
             selectedPriceItem = item;
             PRICE_PER_SQM = item.price;
-            // Barcha kartalarni yangilash
-            container.querySelectorAll('.product-type-card').forEach(function(c) {
-                c.classList.remove('selected');
-            });
+            container.querySelectorAll('.product-type-card').forEach(function(c) { c.classList.remove('selected'); });
             card.classList.add('selected');
             calculatePrice();
         };
-        
         container.appendChild(card);
     });
-    
-    // Agar tanlangan bo'lmasa, birinchisini tanlash
     if (!selectedPriceItem && priceItems.length > 0) {
         selectedPriceItem = priceItems[0];
         PRICE_PER_SQM = priceItems[0].price;
@@ -354,10 +180,10 @@ function renderProductTypeSelector() {
 
 function hexToRgba(hex, a) {
     var r=0,g=0,b=0;
-    if (hex && hex.length===7) { 
-        r=parseInt(hex.slice(1,3),16); 
-        g=parseInt(hex.slice(3,5),16); 
-        b=parseInt(hex.slice(5,7),16); 
+    if (hex && hex.length===7) {
+        r=parseInt(hex.slice(1,3),16);
+        g=parseInt(hex.slice(3,5),16);
+        b=parseInt(hex.slice(5,7),16);
     }
     return 'rgba('+r+','+g+','+b+','+a+')';
 }
@@ -383,11 +209,6 @@ function setupEventListeners() {
         });
     }
 
-    var w = document.getElementById('width');
-    var h = document.getElementById('height');
-    if (w) w.addEventListener('input', calculatePrice);
-    if (h) h.addEventListener('input', calculatePrice);
-
     window.addEventListener('click', function(e) {
         if (e.target.classList.contains('modal')) closeModal(e.target);
     });
@@ -398,17 +219,14 @@ function switchPage(page) {
     document.querySelectorAll('.nav-item').forEach(function(i) { i.classList.remove('active'); });
     var nav = document.querySelector('[data-page="' + page + '"]');
     if (nav) nav.classList.add('active');
-
     document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
     var pg = document.getElementById(page + 'Page');
     if (pg) pg.classList.add('active');
-
     currentPage = page;
-
-    if (page === 'home') { updateStats(); displayRecentOrders(); displayQueuePreview(); }
+    if      (page === 'home')   { updateStats(); displayRecentOrders(); displayQueuePreview(); }
     else if (page === 'orders') { filterOrders(); }
-    else if (page === 'queue') { displayQueue(); }
-    else if (page === 'stats') { displayStats(); }
+    else if (page === 'queue')  { displayQueue(); }
+    else if (page === 'stats')  { displayStats(); }
 }
 
 function updateDateTime() {
@@ -452,20 +270,16 @@ function closeModal(element) {
 
 // =================== FORMS ===================
 function resetForm() {
-    ['phone','village','comment'].forEach(function(id) {
+    ['phone','village','comment','customOrderId'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.value = '';
     });
     var fi = document.getElementById('images'); if (fi) fi.value = '';
     var prev = document.getElementById('imagePreview'); if (prev) prev.innerHTML = '';
     var err = document.getElementById('phoneError'); if (err) err.style.display = 'none';
-    
-    // Mahsulot elementlarini tozalash
     productItemsList = [];
     productItemCounter = 0;
     renderProductItems();
-    
-    // Narx turlarini yuklash (PRODUCT_PRICES ni yangilash uchun)
     loadPriceItems();
 }
 
@@ -474,29 +288,23 @@ function addProductItem(type, emoji, name) {
     productItemCounter++;
     loadProductPricesFromAdmin();
     var priceInfo = PRODUCT_PRICES[type] || { pricingType: 'sqm', pricePerSqm: 80000 };
-    
     var item = {
         id: productItemCounter,
         type: type,
         emoji: emoji,
         name: name,
         pricingType: priceInfo.pricingType || 'sqm',
-        // sqm fields
         width: 3,
         height: 2,
         pricePerSqm: priceInfo.pricePerSqm || 80000,
         area: 6,
-        // size fields (adyol, korpa)
-        sizeVariant: 'large', // 'small' | 'large'
+        sizeVariant: 'large',
         priceSmall: priceInfo.priceSmall || 35000,
         priceLarge: priceInfo.priceLarge || 60000,
-        // kg fields (parda)
         kg: 1,
         pricePerKg: priceInfo.pricePerKg || 15000,
-        // computed
         price: 0
     };
-    // Initial price calc
     item.price = calcItemPrice(item);
     productItemsList.push(item);
     renderProductItems();
@@ -540,29 +348,17 @@ function updateProductItem(itemId, field, value) {
 function selectSizeVariant(itemId, variant, btnEl) {
     var item = productItemsList.find(function(i) { return i.id === itemId; });
     if (!item) return;
-    
-    // Update data
     item.sizeVariant = variant;
     item.price = calcItemPrice(item);
-    
-    // Update button states - only touch DOM, no re-render
     var container = document.getElementById('sizeBtns_' + itemId);
     if (container) {
-        var btns = container.querySelectorAll('.pic-size-btn');
-        btns.forEach(function(b) {
-            b.classList.remove('active');
-        });
+        container.querySelectorAll('.pic-size-btn').forEach(function(b) { b.classList.remove('active'); });
         btnEl.classList.add('active');
     }
-    
-    // Update price display
     var priceEl = document.getElementById('price_' + itemId);
     if (priceEl) priceEl.textContent = Number(item.price).toLocaleString() + " so'm";
-    
-    // Update label
     var labelEl = document.getElementById('sizelabel_' + itemId);
     if (labelEl) labelEl.textContent = variant === 'small' ? "Kichik o'lcham" : "Katta o'lcham";
-    
     updateTotalCalc();
 }
 
@@ -570,36 +366,26 @@ function renderProductItems() {
     var container = document.getElementById('productItemsList');
     if (!container) return;
     container.innerHTML = '';
-    
     if (productItemsList.length === 0) {
         container.innerHTML = '<div class="empty-products-hint"><i class="fas fa-hand-point-up"></i> Yuqoridagi tugmalardan mahsulot qo\'shing</div>';
         updateTotalCalc();
         return;
     }
-    
     var colorMap = {
-        gilam:    '#667eea',
-        adyol:    '#f97316',
-        yakandoz: '#22c55e',
-        parda:    '#8b5cf6',
-        korpa:    '#ec4899'
+        gilam: '#667eea', adyol: '#f97316', yakandoz: '#22c55e',
+        parda: '#8b5cf6', korpa: '#ec4899'
     };
-    
     productItemsList.forEach(function(item, idx) {
         var color = colorMap[item.type] || '#667eea';
         var card = document.createElement('div');
         card.className = 'product-item-card';
         card.style.borderLeftColor = color;
-        
         var now = new Date();
         var timeStr = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
         var dateStr = now.getDate() + '.' + (now.getMonth()+1).toString().padStart(2,'0') + '.' + now.getFullYear();
-        
         var bodyHtml = '';
-        
         if (item.pricingType === 'sqm') {
-            // Gilam, Yakandoz - eni × bo'yi
-            bodyHtml = 
+            bodyHtml =
                 '<div class="pic-dimensions">' +
                     '<div class="pic-dim-group">' +
                         '<label>Eni (m)</label>' +
@@ -624,11 +410,9 @@ function renderProductItems() {
                     '<div class="pic-price-per">' + Number(item.pricePerSqm).toLocaleString() + " so'm/m²</div>" +
                     '<div class="pic-total-price" id="price_' + item.id + '" style="color:' + color + ';">' + Number(item.price).toLocaleString() + " so'm</div>" +
                 '</div>';
-                
         } else if (item.pricingType === 'size') {
-            // Adyol, Ko'rpa - katta yoki kichik
             var isSmall = item.sizeVariant === 'small';
-            bodyHtml = 
+            bodyHtml =
                 '<div class="pic-size-selector">' +
                     '<div class="pic-size-label">O\'lcham tanlang:</div>' +
                     '<div class="pic-size-btns" id="sizeBtns_' + item.id + '">' +
@@ -652,10 +436,8 @@ function renderProductItems() {
                     '<div class="pic-price-per" id="sizelabel_' + item.id + '">' + (isSmall ? 'Kichik o\'lcham' : 'Katta o\'lcham') + '</div>' +
                     '<div class="pic-total-price" id="price_' + item.id + '" style="color:' + color + ';">' + Number(item.price).toLocaleString() + " so'm</div>" +
                 '</div>';
-                
         } else if (item.pricingType === 'kg') {
-            // Parda - kg bo'yicha
-            bodyHtml = 
+            bodyHtml =
                 '<div class="pic-dimensions">' +
                     '<div class="pic-dim-group" style="flex:none;min-width:100px;">' +
                         '<label>Og\'irlik (kg)</label>' +
@@ -674,8 +456,7 @@ function renderProductItems() {
                     '<div class="pic-total-price" id="price_' + item.id + '" style="color:' + color + ';">' + Number(item.price).toLocaleString() + " so'm</div>" +
                 '</div>';
         }
-        
-        card.innerHTML = 
+        card.innerHTML =
             '<div class="pic-header" style="border-bottom:2px solid ' + color + '20;">' +
                 '<div class="pic-title">' +
                     '<span class="pic-emoji" style="background:' + color + '20;">' + item.emoji + '</span>' +
@@ -687,10 +468,8 @@ function renderProductItems() {
                 '<button type="button" class="pic-remove" onclick="removeProductItem(' + item.id + ')" title="O\'chirish">✕</button>' +
             '</div>' +
             '<div class="pic-body">' + bodyHtml + '</div>';
-        
         container.appendChild(card);
     });
-    
     updateTotalCalc();
 }
 
@@ -698,9 +477,7 @@ function updateTotalCalc() {
     var totalBox = document.getElementById('totalCalcBox');
     var priceEl = document.getElementById('livePrice');
     var countEl = document.getElementById('liveItemCount');
-    
     var total = productItemsList.reduce(function(s, i) { return s + (i.price || 0); }, 0);
-    
     if (productItemsList.length === 0) {
         if (totalBox) totalBox.style.display = 'none';
     } else {
@@ -711,7 +488,6 @@ function updateTotalCalc() {
 }
 
 function calculatePrice() {
-    // Eski funksiya - endi ishlatilmaydi, lekin moslik uchun saqlaymiz
     updateTotalCalc();
     return { area: 0, price: productItemsList.reduce(function(s,i){return s+i.price;}, 0) };
 }
@@ -754,35 +530,40 @@ function validatePhone(input) {
     }
 }
 
-// =================== SAVE ORDER ===================
+// =================== ZAKAZ SAQLASH ===================
 function saveOrder() {
-    var phoneEl = document.getElementById('phone');
-    var villageEl = document.getElementById('village');
-    var commentEl = document.getElementById('comment');
+    var phoneEl    = document.getElementById('phone');
+    var villageEl  = document.getElementById('village');
+    var commentEl  = document.getElementById('comment');
+    var customIdEl = document.getElementById('customOrderId');
 
-    var phone = phoneEl ? phoneEl.value.trim() : '';
-    var village = villageEl ? villageEl.value.trim() : '';
-    var comment = commentEl ? commentEl.value.trim() : '';
+    var phone    = phoneEl    ? phoneEl.value.trim()    : '';
+    var village  = villageEl  ? villageEl.value.trim()  : '';
+    var comment  = commentEl  ? commentEl.value.trim()  : '';
+    var customId = customIdEl ? customIdEl.value.trim() : '';
 
-    if (!phone) { showToast("Telefon raqamni kiriting", 'error'); return; }
+    if (!phone)   { showToast("Telefon raqamni kiriting", 'error'); return; }
     if (phone.length !== 9) { showToast("9 raqamli bolishi kerak", 'error'); return; }
     if (!village) { showToast("Qishloqni kiriting", 'error'); return; }
     if (productItemsList.length === 0) { showToast("Kamida 1 ta mahsulot qo'shing", 'error'); return; }
 
+    // Duplicate displayId tekshirish
+    if (customId) {
+        var exists = orders.find(function(o) { return String(o.displayId) === String(customId); });
+        if (exists) { showToast('Bu ID allaqachon bor: #' + customId, 'error'); return; }
+    }
+
     var saveBtn = document.getElementById('saveOrder');
     if (saveBtn) saveBtn.disabled = true;
-
     showToast("Saqlanmoqda...", 'info');
 
-    var fullPhone = '+998' + phone;
-    
-    // Jami narx va asosiy mahsulot
-    var totalPrice = productItemsList.reduce(function(s,i){return s+(i.price||0);}, 0);
-    var totalArea = productItemsList.reduce(function(s,i){return s+(i.area||0);}, 0);
-    var firstItem = productItemsList[0];
-    var productType = productItemsList.map(function(i){return i.name;}).join(', ');
-    var productEmoji = firstItem ? firstItem.emoji : '🧺';
-    var pricePerSqm = firstItem ? firstItem.pricePerSqm : PRICE_PER_SQM;
+    var fullPhone    = '+998' + phone;
+    var totalPrice   = productItemsList.reduce(function(s,i){return s+(i.price||0);}, 0);
+    var totalArea    = productItemsList.reduce(function(s,i){return s+(i.area||0);}, 0);
+    var firstItem    = productItemsList[0];
+    var productType  = productItemsList.map(function(i){return i.name;}).join(', ');
+    var productEmoji = firstItem ? firstItem.emoji       : '🧺';
+    var pricePerSqm  = firstItem ? firstItem.pricePerSqm : PRICE_PER_SQM;
 
     // Rasmlarni olish
     var images = [];
@@ -792,33 +573,35 @@ function saveOrder() {
     });
 
     function doSave() {
-        var orderId = Date.now();
+        var orderId   = Date.now();
+        var displayId = customId ? String(customId) : String(orderId).slice(-6);
+
         var order = {
-            id: orderId,
-            phone: fullPhone,
-            location: village,
-            width: firstItem ? firstItem.width : 3,
-            height: firstItem ? firstItem.height : 2,
-            price: totalPrice,
-            pricePerSqm: pricePerSqm,
-            totalArea: totalArea,
-            productType: productType,
+            id:           orderId,
+            displayId:    displayId,
+            phone:        fullPhone,
+            location:     village,
+            width:        firstItem ? firstItem.width  : 3,
+            height:       firstItem ? firstItem.height : 2,
+            price:        totalPrice,
+            pricePerSqm:  pricePerSqm,
+            totalArea:    totalArea,
+            productType:  productType,
             productEmoji: productEmoji,
-            productItems: JSON.stringify(productItemsList),  // Barcha mahsulotlar
-            comment: comment,
-            images: JSON.stringify(images),
-            createdAt: new Date().toISOString(),
-            status: 'new',
+            productItems: JSON.stringify(productItemsList),
+            comment:      comment,
+            images:       JSON.stringify(images),
+            createdAt:    new Date().toISOString(),
+            status:       'new',
             paymentStatus: 'unpaid',
             paymentMethod: null,
-            paidAt: null,
-            queueNumber: null
+            paidAt:        null,
+            queueNumber:   null
         };
 
         saveOrderToDB(order, function(err) {
             if (saveBtn) saveBtn.disabled = false;
             if (err) {
-                console.error('Saqlash xato:', err);
                 showToast('Saqlashda xatolik: ' + err, 'error');
                 return;
             }
@@ -827,12 +610,11 @@ function saveOrder() {
                 displayRecentOrders();
                 displayQueuePreview();
                 closeOrderModal();
-                showToast('Zakaz saqlandi! #' + String(orderId).slice(-6), 'success');
+                showToast('✅ Zakaz saqlandi! #' + displayId, 'success');
             });
         });
     }
 
-    // Agar file input da rasm bo'lsa, o'qib olish
     if (images.length === 0) {
         var fi = document.getElementById('images');
         if (fi && fi.files && fi.files.length > 0) {
@@ -840,15 +622,8 @@ function saveOrder() {
             var processed = 0;
             files.forEach(function(file) {
                 var reader = new FileReader();
-                reader.onload = function(e) {
-                    images.push(e.target.result);
-                    processed++;
-                    if (processed === files.length) doSave();
-                };
-                reader.onerror = function() {
-                    processed++;
-                    if (processed === files.length) doSave();
-                };
+                reader.onload = function(e) { images.push(e.target.result); processed++; if (processed === files.length) doSave(); };
+                reader.onerror = function() { processed++; if (processed === files.length) doSave(); };
                 reader.readAsDataURL(file);
             });
         } else {
@@ -859,7 +634,6 @@ function saveOrder() {
     }
 }
 
-
 // =================== STATS ===================
 function updateStats() {
     var today = new Date(); today.setHours(0,0,0,0);
@@ -868,11 +642,10 @@ function updateStats() {
         return d.getTime() === today.getTime();
     });
     var totalArea = orders.reduce(function(s,o) { return s + ((o.width||0)*(o.height||0)); }, 0);
-
     var t1 = document.getElementById('totalOrdersStat'); if (t1) t1.textContent = orders.length;
     var t2 = document.getElementById('todayOrdersStat'); if (t2) t2.textContent = todayOrders.length;
-    var t3 = document.getElementById('totalAreaStat'); if (t3) t3.textContent = totalArea.toFixed(1);
-    var b1 = document.getElementById('ordersBadge'); if (b1) b1.textContent = todayOrders.length;
+    var t3 = document.getElementById('totalAreaStat');   if (t3) t3.textContent = totalArea.toFixed(1);
+    var b1 = document.getElementById('ordersBadge');     if (b1) b1.textContent = todayOrders.length;
     var qCount = orders.filter(function(o) { return ['queue','washing','ready'].indexOf(o.status) >= 0; }).length;
     var b2 = document.getElementById('queueBadge'); if (b2) b2.textContent = qCount;
 }
@@ -889,16 +662,15 @@ function displayRecentOrders() {
     var sE = { new:'🆕', queue:'⏳', washing:'🧼', ready:'✅', done:'✔️' };
     container.innerHTML = '';
     recent.forEach(function(order) {
-        var area = ((order.width||0)*(order.height||0)).toFixed(2);
-        var last4 = (order.phone||'').replace(/\D/g,'').slice(-4);
+        var showId = order.displayId || String(order.id).slice(-6);
         var div = document.createElement('div');
         div.className = 'order-card status-' + order.status;
         div.innerHTML =
-            '<div class="order-header"><span class="order-id">#' + String(order.id).slice(-6) + '</span>' +
+            '<div class="order-header"><span class="order-id">#' + showId + '</span>' +
             '<span class="order-status">' + (sE[order.status]||'📦') + '</span></div>' +
-            '<div class="order-phone">' + (order.productEmoji||'🧺') + ' ****' + last4 + '</div>' +
-            '<div class="order-details"><span>' + (order.productType||'Gilam') + '</span><span>📍 ' + order.location + '</span><span>' + area + 'm²</span></div>' +
-            '<div class="order-price">' + Number(order.price).toLocaleString() + " so'm</div>";
+            '<div class="order-phone">' + (order.productEmoji||'🧺') + ' ' + (order.phone||'') + '</div>' +
+            '<div class="order-details"><span>📍 ' + (order.location||'') + '</span></div>' +
+            '<div class="order-price">' + Number(order.price||0).toLocaleString() + " so'm</div>";
         div.onclick = function() { openDetailsModal(order); };
         container.appendChild(div);
     });
@@ -916,12 +688,12 @@ function displayQueuePreview() {
     var sE = { queue:'⏳', washing:'🧼', ready:'✅' };
     container.innerHTML = '';
     preview.forEach(function(order, idx) {
-        var last4 = (order.phone||'').replace(/\D/g,'').slice(-4);
+        var showId = order.displayId || String(order.id).slice(-6);
         var div = document.createElement('div');
         div.className = 'queue-item status-' + order.status;
         div.innerHTML = '<div class="queue-number">' + (idx+1) + '</div>' +
             '<div class="queue-info"><div class="queue-phone">📍 ' + (order.location||'—') + '</div>' +
-            '<div class="queue-time">' + (sE[order.status]||'') + ' ' + (order.productEmoji||'🧺') + ' ' + last4 + '</div></div>';
+            '<div class="queue-time">' + (sE[order.status]||'') + ' #' + showId + ' · ' + (order.phone||'') + '</div></div>';
         div.onclick = function() { openDetailsModal(order); };
         container.appendChild(div);
     });
@@ -937,9 +709,14 @@ function filterOrders() {
         filtered = filtered.filter(function(o) {
             var pd = (o.phone||'').replace(/\D/g,'');
             var sd = searchTerm.replace(/\D/g,'');
-            return pd.includes(sd) || (sd.length >= 4 && pd.slice(-4) === sd) ||
-                (o.phone||'').toLowerCase().includes(searchTerm) ||
-                (o.location||'').toLowerCase().includes(searchTerm);
+            var dId = String(o.displayId||'').toLowerCase();
+            var shortId = String(o.id||'').slice(-6);
+            return dId.includes(searchTerm) ||
+                   shortId.includes(searchTerm) ||
+                   pd.includes(sd) ||
+                   (sd.length >= 4 && pd.slice(-4) === sd) ||
+                   (o.phone||'').toLowerCase().includes(searchTerm) ||
+                   (o.location||'').toLowerCase().includes(searchTerm);
         });
     }
 
@@ -949,7 +726,7 @@ function filterOrders() {
         filtered = filtered.filter(function(o) {
             var d = new Date(o.createdAt); d.setHours(0,0,0,0);
             if (currentFilter === 'today') return d.getTime() === today.getTime();
-            if (currentFilter === 'week') { var w = new Date(today); w.setDate(w.getDate()-7); return d >= w; }
+            if (currentFilter === 'week')  { var w = new Date(today); w.setDate(w.getDate()-7); return d >= w; }
             if (currentFilter === 'month') { var m = new Date(today); m.setMonth(m.getMonth()-1); return d >= m; }
             return true;
         });
@@ -968,16 +745,15 @@ function displayFilteredOrders(filtered) {
     var sE = { new:'🆕', queue:'⏳', washing:'🧼', ready:'✅', done:'✔️' };
     container.innerHTML = '';
     filtered.forEach(function(order) {
-        var area = ((order.width||0)*(order.height||0)).toFixed(2);
-        var last4 = (order.phone||'').replace(/\D/g,'').slice(-4);
+        var showId = order.displayId || String(order.id).slice(-6);
         var div = document.createElement('div');
         div.className = 'order-card status-' + order.status;
         div.innerHTML =
-            '<div class="order-header"><span class="order-id">#' + String(order.id).slice(-6) + '</span>' +
+            '<div class="order-header"><span class="order-id">#' + showId + '</span>' +
             '<span class="order-status">' + (sE[order.status]||'📦') + ' ' + (order.paymentStatus==='paid'?'💰':'💳') + '</span></div>' +
-            '<div class="order-phone">' + (order.productEmoji||'🧺') + ' ****' + last4 + '</div>' +
-            '<div class="order-details"><span>' + (order.productType||'Gilam') + '</span><span>📍 ' + order.location + '</span><span>' + area + 'm²</span>' +
-            '<span class="order-price">' + Number(order.price).toLocaleString() + '</span></div>';
+            '<div class="order-phone">' + (order.productEmoji||'🧺') + ' ' + (order.phone||'') + '</div>' +
+            '<div class="order-details"><span>📍 ' + (order.location||'') + '</span>' +
+            '<span class="order-price">' + Number(order.price||0).toLocaleString() + "</span></div>";
         div.onclick = function() { openDetailsModal(order); };
         container.appendChild(div);
     });
@@ -991,18 +767,13 @@ function setFilter(element, filter) {
 }
 
 // =================== QUEUE PAGE ===================
-var currentQueueSort = 'newest'; // newest, oldest, village, time
-
 function displayQueue() {
     var container = document.getElementById('queueList');
     if (!container) return;
     var filtered = orders.filter(function(o) { return ['queue','washing','ready'].indexOf(o.status) >= 0; });
-    
     if (currentQueueFilter !== 'all') {
         filtered = filtered.filter(function(o) { return o.status === currentQueueFilter; });
     }
-
-    // Tartiblash
     if (currentQueueSort === 'newest') {
         filtered.sort(function(a,b) { return new Date(b.createdAt) - new Date(a.createdAt); });
     } else if (currentQueueSort === 'oldest') {
@@ -1012,9 +783,7 @@ function displayQueue() {
     } else if (currentQueueSort === 'time') {
         filtered.sort(function(a,b) {
             var ta = new Date(a.createdAt), tb = new Date(b.createdAt);
-            var timeA = ta.getHours()*60 + ta.getMinutes();
-            var timeB = tb.getHours()*60 + tb.getMinutes();
-            return timeA - timeB;
+            return (ta.getHours()*60+ta.getMinutes()) - (tb.getHours()*60+tb.getMinutes());
         });
     } else {
         filtered.sort(function(a,b) { return (a.queueNumber||999)-(b.queueNumber||999); });
@@ -1026,7 +795,6 @@ function displayQueue() {
         return;
     }
     var sL = { queue:'Kutilmoqda', washing:'Yuvilmoqda', ready:'Tayyor' };
-    var sE = { queue:'⏳', washing:'🧼', ready:'✅' };
     container.innerHTML = '';
     filtered.forEach(function(order, idx) {
         var div = document.createElement('div');
@@ -1034,12 +802,12 @@ function displayQueue() {
         var cDate = new Date(order.createdAt);
         var timeStr = cDate.toLocaleTimeString('uz-UZ',{hour:'2-digit',minute:'2-digit'});
         var dateStr = cDate.getDate() + '.' + String(cDate.getMonth()+1).padStart(2,'0');
-        var last4 = (order.phone||'').replace(/\D/g,'').slice(-4);
+        var showId = order.displayId || String(order.id).slice(-6);
         var area = ((order.width||0)*(order.height||0)).toFixed(1);
-        div.innerHTML = 
+        div.innerHTML =
             '<div class="queue-number">' + (idx+1) + '</div>' +
             '<div class="queue-info">' +
-                '<div class="queue-phone">📍 ' + (order.location||'—') + ' · ' + last4 + '</div>' +
+                '<div class="queue-phone">#' + showId + ' · ' + (order.phone||'') + '</div>' +
                 '<div class="queue-meta">' +
                     '<span>📍 ' + (order.location||'') + '</span>' +
                     '<span>📐 ' + area + 'm²</span>' +
@@ -1080,10 +848,8 @@ function initSwipeButton(orderId) {
     var label = document.querySelector('.swipe-label');
     var success = document.getElementById('swipeSuccess');
     if (!container || !track || !thumb) return;
-
     var startX = 0, isDragging = false;
     var maxSwipe = container.offsetWidth - 76;
-
     function handleStart(e) {
         startX = e.touches ? e.touches[0].clientX : e.clientX;
         isDragging = true;
@@ -1112,7 +878,6 @@ function initSwipeButton(orderId) {
             if (label) label.style.opacity = '1';
         }
     }
-
     thumb.addEventListener('touchstart', handleStart, {passive:true});
     thumb.addEventListener('mousedown', handleStart);
     document.addEventListener('touchmove', handleMove, {passive:true});
@@ -1148,10 +913,10 @@ function displayStats() {
         return list.filter(function(o){return o.paymentStatus==='paid';}).reduce(function(s,o){return s+(Number(o.price)||0);},0);
     }
     var todayO = orders.filter(function(o){var d=new Date(o.createdAt);d.setHours(0,0,0,0);return d.getTime()===today.getTime();});
-    var weekO = orders.filter(function(o){return new Date(o.createdAt)>=ws;});
+    var weekO  = orders.filter(function(o){return new Date(o.createdAt)>=ws;});
     var monthO = orders.filter(function(o){return new Date(o.createdAt)>=ms;});
     var r1=document.getElementById('repToday'); if(r1) r1.textContent=calcRev(todayO).toLocaleString()+" so'm";
-    var r2=document.getElementById('repWeek'); if(r2) r2.textContent=calcRev(weekO).toLocaleString()+" so'm";
+    var r2=document.getElementById('repWeek');  if(r2) r2.textContent=calcRev(weekO).toLocaleString()+" so'm";
     var r3=document.getElementById('repMonth'); if(r3) r3.textContent=calcRev(monthO).toLocaleString()+" so'm";
     var stats=document.getElementById('reportStats');
     if (stats) {
@@ -1173,6 +938,7 @@ function openDetailsModal(order) {
     if (!modal || !content) return;
 
     currentOrderId = Number(order.id);
+    var showId = order.displayId || String(order.id).slice(-6);
     var area = ((order.width||0)*(order.height||0)).toFixed(2);
     var sCfg = {
         new:     {label:'Yangi',       emoji:'🆕', color:'#667eea', bg:'#ebf4ff'},
@@ -1196,11 +962,8 @@ function openDetailsModal(order) {
             }).join('') + '</div>';
     }
 
-    var orderId = String(order.id).slice(-6);
-    var last4 = (order.phone||'').replace(/\D/g,'').slice(-4);
     var STATS = ['new','queue','washing','ready','done'];
     var curIdx = STATS.indexOf(order.status);
-
     var progressHtml = STATS.map(function(s, i) {
         var s2 = sCfg[s];
         var isActive = i === curIdx, isDone = i < curIdx;
@@ -1211,22 +974,21 @@ function openDetailsModal(order) {
     }).join('');
 
     var payColor = order.paymentStatus==='paid'?'#4caf50':'#f44336';
-    var payBg = order.paymentStatus==='paid'?'#e8f5e9':'#fce4ec';
-    var payText = order.paymentStatus==='paid'?'✅ Tolangan':'❌ Tolanmagan';
+    var payBg    = order.paymentStatus==='paid'?'#e8f5e9':'#fce4ec';
+    var payText  = order.paymentStatus==='paid'?'✅ Tolangan':'❌ Tolanmagan';
 
     content.innerHTML = imagesHtml +
         '<div class="det-header-card">' +
             '<div class="det-header-top">' +
-                '<div class="det-order-id"><span class="det-id-label">ZAKAZ</span><span class="det-id-num">#' + orderId + '</span></div>' +
+                '<div class="det-order-id"><span class="det-id-label">ZAKAZ</span><span class="det-id-num">#' + showId + '</span></div>' +
                 '<div class="det-status-badge" style="background:' + sc.bg + ';color:' + sc.color + ';">' + sc.emoji + ' ' + sc.label + '</div>' +
             '</div>' +
-            '<div class="det-header-phone"><i class="fas fa-phone-alt"></i><span>' + order.phone + '</span><span class="det-last4">****' + last4 + '</span></div>' +
+            '<div class="det-header-phone"><i class="fas fa-phone-alt"></i><span>' + (order.phone||'') + '</span></div>' +
         '</div>' +
         '<div class="det-info-grid">' +
-            '<div class="det-info-card"><div class="det-info-icon" style="background:#ebf4ff;color:#667eea;"><i class="fas fa-map-marker-alt"></i></div><div class="det-info-text"><span class="det-info-label">Manzil</span><span class="det-info-val">' + order.location + '</span></div></div>' +
-            '<div class="det-info-card"><div class="det-info-icon" style="background:#f3e8ff;color:#764ba2;\"><i class="fas fa-tag"></i></div><div class="det-info-text"><span class="det-info-label">Mahsulot</span><span class="det-info-val">' + (order.productEmoji||'🧺') + ' ' + (order.productType||'Oddiy gilam') + '</span></div></div>' +
+            '<div class="det-info-card"><div class="det-info-icon" style="background:#ebf4ff;color:#667eea;"><i class="fas fa-map-marker-alt"></i></div><div class="det-info-text"><span class="det-info-label">Manzil</span><span class="det-info-val">' + (order.location||'') + '</span></div></div>' +
+            '<div class="det-info-card"><div class="det-info-icon" style="background:#f3e8ff;color:#764ba2;"><i class="fas fa-tag"></i></div><div class="det-info-text"><span class="det-info-label">Mahsulot</span><span class="det-info-val">' + (order.productEmoji||'🧺') + ' ' + (order.productType||'Oddiy gilam') + '</span></div></div>' +
             (function() {
-                // Ko'p mahsulot bo'lsa ko'rsatish
                 var items = [];
                 try { items = JSON.parse(order.productItems || '[]'); } catch(e) {}
                 if (items.length > 1) {
@@ -1244,8 +1006,8 @@ function openDetailsModal(order) {
                 }
                 return '';
             })() +
-            '<div class="det-info-card"><div class="det-info-icon" style="background:#e8f5e9;color:#4caf50;"><i class="fas fa-ruler-combined"></i></div><div class="det-info-text"><span class="det-info-label">Olcham</span><span class="det-info-val">' + order.width + 'm x ' + order.height + 'm = <strong>' + area + 'm²</strong></span></div></div>' +
-            '<div class="det-info-card"><div class="det-info-icon" style="background:#fff3e0;color:#ff9800;"><i class="fas fa-tag"></i></div><div class="det-info-text"><span class="det-info-label">Narx</span><span class="det-info-val" style="color:#4caf50;font-weight:700;">' + Number(order.price).toLocaleString() + " so'm</span></div></div>" +
+            '<div class="det-info-card"><div class="det-info-icon" style="background:#e8f5e9;color:#4caf50;"><i class="fas fa-ruler-combined"></i></div><div class="det-info-text"><span class="det-info-label">Olcham</span><span class="det-info-val">' + (order.width||0) + 'm x ' + (order.height||0) + 'm = <strong>' + area + 'm²</strong></span></div></div>' +
+            '<div class="det-info-card"><div class="det-info-icon" style="background:#fff3e0;color:#ff9800;"><i class="fas fa-tag"></i></div><div class="det-info-text"><span class="det-info-label">Narx</span><span class="det-info-val" style="color:#4caf50;font-weight:700;">' + Number(order.price||0).toLocaleString() + " so'm</span></div></div>" +
             '<div class="det-info-card"><div class="det-info-icon" style="background:' + payBg + ';color:' + payColor + ';"><i class="fas fa-credit-card"></i></div><div class="det-info-text"><span class="det-info-label">Tolov</span><span class="det-info-val" style="color:' + payColor + ';font-weight:600;">' + payText + '</span></div></div>' +
         '</div>' +
         '<div class="det-progress">' + progressHtml + '</div>' +
@@ -1257,7 +1019,7 @@ function openDetailsModal(order) {
         (order.comment ? '<div style="background:#f8f9fa;padding:12px;border-radius:10px;margin-top:12px;font-size:13px;color:#666;">' + order.comment + '</div>' : '');
 
     navDiv.innerHTML =
-        '<button class="det-nav-btn det-nav-call" onclick="callOrderNumber(\'' + order.phone + '\')"><i class="fas fa-phone"></i> Qongiroq</button>' +
+        '<button class="det-nav-btn det-nav-call" onclick="callOrderNumber(\'' + (order.phone||'') + '\')"><i class="fas fa-phone"></i> Qongiroq</button>' +
         '<button class="det-nav-btn det-nav-status" onclick="openStatusNavigator(' + Number(order.id) + ')"><i class="fas fa-exchange-alt"></i> Holat</button>' +
         (order.paymentStatus==='unpaid' && order.status==='ready' ? '<button class="det-nav-btn det-nav-status" onclick="openPaymentModal(' + Number(order.id) + ')" style="background:linear-gradient(135deg,#2196f3,#1976d2);"><i class="fas fa-money-bill"></i> Tolov</button>' : '') +
         '<button class="det-nav-btn det-nav-delete" onclick="confirmDeleteOrder(' + Number(order.id) + ')"><i class="fas fa-trash"></i></button>';
@@ -1306,7 +1068,7 @@ function openPaymentModal(orderId) {
         '<div style="text-align:center;padding:20px;"><div style="font-size:60px;">💳</div>' +
         '<h2 style="font-size:22px;font-weight:800;color:#667eea;">Tolovni qabul qiling</h2></div>' +
         '<div style="background:linear-gradient(135deg,#667eea,#764ba2);color:white;padding:20px;border-radius:16px;margin-bottom:20px;text-align:center;">' +
-        '<div style="font-size:32px;font-weight:800;">' + Number(order.price).toLocaleString() + " so'm</div></div>" +
+        '<div style="font-size:32px;font-weight:800;">' + Number(order.price||0).toLocaleString() + " so'm</div></div>" +
         '<div><p style="font-size:12px;color:#666;font-weight:600;margin-bottom:10px;">Tolov usuli:</p></div>';
 
     var btn1 = document.createElement('button');
@@ -1353,6 +1115,7 @@ function openStatusNavigator(orderId) {
     if (!order) return;
     var content = document.getElementById('detailsContent');
     var navDiv = document.getElementById('detailsNavigation');
+    var showId = order.displayId || String(order.id).slice(-6);
     var STEPS = [
         {status:'new',     num:1, label:'Yangi',  color:'#667eea', bg:'#ebf4ff'},
         {status:'queue',   num:2, label:'Navbat', color:'#ff9800', bg:'#fff3e0'},
@@ -1361,7 +1124,7 @@ function openStatusNavigator(orderId) {
     ];
     content.innerHTML =
         '<div style="background:#f0f3ff;padding:12px;border-radius:10px;margin-bottom:16px;border-left:4px solid #667eea;">' +
-        '<div style="font-weight:600;color:#667eea;">#' + String(id).slice(-6) + ' — ' + order.phone + '</div></div>' +
+        '<div style="font-weight:600;color:#667eea;">#' + showId + ' — ' + (order.phone||'') + '</div></div>' +
         STEPS.map(function(s) {
             var isActive = order.status === s.status;
             return '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;padding:12px;background:' + (isActive?s.bg:'#f5f5f5') + ';border-radius:10px;border-left:4px solid ' + (isActive?s.color:'#ddd') + ';">' +
@@ -1461,4 +1224,4 @@ window.addProductItem=addProductItem; window.removeProductItem=removeProductItem
 window.updateProductItem=updateProductItem; window.renderProductItems=renderProductItems;
 window.selectSizeVariant=selectSizeVariant; window.setQueueSort=setQueueSort;
 
-console.log('Script v4.0 yuklandi');
+console.log('✅ Script v5.3 yuklandi');

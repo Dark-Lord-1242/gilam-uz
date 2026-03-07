@@ -109,9 +109,9 @@
 
             <div class="search-box">
                 <i class="fas fa-search"></i>
-                <input type="text" id="searchInput" placeholder="Telefon, manzil yoki oxirgi 4 raqam..." onkeyup="filterOrders()" inputmode="text">
+                <input type="text" id="searchInput" placeholder="ID, telefon yoki qishloq..." onkeyup="filterOrders()" inputmode="text">
             </div>
-            <div class="search-hint">💡 Masalan: oxirgi 4 raqam "5678" yozsa zakaz topiladi</div>
+            <div class="search-hint">💡 ID raqam, telefon oxirgi 4 raqam yoki qishloq nomi bilan qidiring</div>
             
             <div class="filter-chips">
                 <button class="chip active" data-filter="all" onclick="setFilter(this, 'all')">Barchasi</button>
@@ -183,6 +183,18 @@
             </div>
 
             <div class="modal-body">
+                <!-- Zakaz ID (qo'lda yoki avtomatik) -->
+                <div class="form-group">
+                    <label><i class="fas fa-hashtag"></i> Zakaz ID <span style="color:#999;font-weight:400;font-size:12px;">(bo'sh qoldirsangiz avtomatik)</span></label>
+                    <input 
+                        type="text" 
+                        id="customOrderId" 
+                        placeholder="Masalan: 472584"
+                        inputmode="text"
+                        maxlength="20"
+                        style="letter-spacing:1px;">
+                </div>
+
                 <div class="form-group">
                     <label><i class="fas fa-phone"></i> Telefon raqam</label>
                     <div class="phone-input-wrapper">
@@ -251,17 +263,6 @@
                 </div>
 
                 <div class="form-group">
-                    <label><i class="fas fa-camera"></i> Rasmlar</label>
-                    <div class="upload-area" id="dropZone" onclick="document.getElementById('images').click()">
-                        <input type="file" id="images" multiple accept="image/*" hidden onchange="showPreview(this.files)">
-                        <i class="fas fa-cloud-upload-alt"></i>
-                        <p>Rasm yuklash uchun bosing</p>
-                        <small>JPG, PNG (10 tagacha)</small>
-                    </div>
-                    <div class="image-preview" id="imagePreview"></div>
-                </div>
-
-                <div class="form-group">
                     <label><i class="fas fa-comment"></i> Izoh</label>
                     <textarea id="comment" rows="2" placeholder="Qo'shimcha ma'lumot..."></textarea>
                 </div>
@@ -326,6 +327,7 @@
 
     <!-- SCRIPTS -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Firebase setup: FIREBASE_URL ni script.js da o'zgartiring -->
     <script src="script.js"></script>
 </body>
 </html>
